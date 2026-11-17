@@ -1,29 +1,21 @@
 
 import os
 import hmac
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 
-
-# Initialize FastAPI
 app = FastAPI(title="Talent Pool Rediscovery API")
 
-
-# Project directory
 PROJECT_ROOT = Path(__file__).resolve().parent
+RESULTS_DIR = PROJECT_ROOT / "results"
+RESULTS_FILE = RESULTS_DIR / "candidate_matching_results.csv"
 
-# Python matching pipeline output CSV
-RESULTS_FILE = (
-    PROJECT_ROOT / "results" / "candidate_matching_results.csv"
-)
-
-# API authentication token
 API_TOKEN = os.environ.get("TALENT_API_TOKEN")
 
 
-# Verify Salesforce API key
 def verify_api_token(x_api_key):
     if not API_TOKEN:
         raise HTTPException(
@@ -38,7 +30,6 @@ def verify_api_token(x_api_key):
         )
 
 
-# Home endpoint
 @app.get("/")
 def home():
     return {
@@ -46,39 +37,76 @@ def home():
     }
 
 
-# Retrieve latest Python-generated matching results
+@app.post("/upload-results")
+async def upload_results(
+    file: UploadFile = File(...),
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
+    verify_api_token(x_api_key)
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a CSV file."
+        )
+
+    content = await file.read()
+
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="CSV file must be smaller than 10 MB."
+        )
+
+    try:
+        results = pd.read_csv(BytesIO(content)).fillna("")
+
+        if results.empty:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded CSV contains no results."
+            )
+
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        results.to_csv(RESULTS_FILE, index=False)
+
+        return {
+            "message": "Matching results uploaded successfully.",
+            "total_results": len(results)
+        }
+
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read the uploaded CSV file."
+        )
+
+
 @app.get("/results")
 def get_latest_results(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
     verify_api_token(x_api_key)
 
-    # Check whether Python has generated the CSV
     if not RESULTS_FILE.exists():
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Matching results not found. "
-                "Run the Python matching pipeline first."
-            )
+            detail="Matching results not found. Upload results first."
         )
 
     try:
-        # Read the latest matching results
         results = pd.read_csv(RESULTS_FILE).fillna("")
 
-        # Return results to Salesforce
         return {
             "total_results": len(results),
             "results": results.to_dict(orient="records"),
-            "message": (
-                "Latest Python matching results "
-                "retrieved successfully."
-            )
+            "message": "Latest Python matching results retrieved successfully."
         }
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=str(error)
+            detail="Could not read the matching results."
         )
