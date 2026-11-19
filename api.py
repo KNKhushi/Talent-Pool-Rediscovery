@@ -266,7 +266,7 @@ async def upload_results(
 
         raise HTTPException(
             status_code=502,
-            detail="Supabase could not save the matching results. Check Render logs."
+            detail="Supabase could not save matching results. Check Render logs."
         )
 
     except HTTPException:
