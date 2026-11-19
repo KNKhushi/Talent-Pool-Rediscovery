@@ -2,18 +2,19 @@
 import os
 import hmac
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
+import httpx
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+
 
 app = FastAPI(title="Talent Pool Rediscovery API")
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = PROJECT_ROOT / "results"
-RESULTS_FILE = RESULTS_DIR / "candidate_matching_results.csv"
-
 API_TOKEN = os.environ.get("TALENT_API_TOKEN")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+TABLE_NAME = "talent_pool_results"
 
 
 def verify_api_token(x_api_key):
@@ -30,6 +31,22 @@ def verify_api_token(x_api_key):
         )
 
 
+def verify_supabase_config():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase configuration is missing."
+        )
+
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+
 @app.get("/")
 def home():
     return {
@@ -43,6 +60,7 @@ async def upload_results(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
     verify_api_token(x_api_key)
+    verify_supabase_config()
 
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(
@@ -59,19 +77,39 @@ async def upload_results(
         )
 
     try:
-        results = pd.read_csv(BytesIO(content)).fillna("")
+        results_df = pd.read_csv(BytesIO(content)).fillna("")
 
-        if results.empty:
+        if results_df.empty:
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded CSV contains no results."
             )
 
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        results.to_csv(RESULTS_FILE, index=False)
+        results = results_df.to_dict(orient="records")
+
+        payload = {
+            "total_results": len(results),
+            "results": results
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
+                headers={
+                    **supabase_headers(),
+                    "Prefer": "return=minimal"
+                },
+                json=payload
+            )
+
+        if response.status_code not in (200, 201):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not save results to Supabase."
+            )
 
         return {
-            "message": "Matching results uploaded successfully.",
+            "message": "Matching results saved successfully.",
             "total_results": len(results)
         }
 
@@ -80,33 +118,56 @@ async def upload_results(
     except Exception:
         raise HTTPException(
             status_code=400,
-            detail="Could not read the uploaded CSV file."
+            detail="Could not process the uploaded CSV."
         )
 
 
 @app.get("/results")
-def get_latest_results(
+async def get_latest_results(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
     verify_api_token(x_api_key)
-
-    if not RESULTS_FILE.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Matching results not found. Upload results first."
-        )
+    verify_supabase_config()
 
     try:
-        results = pd.read_csv(RESULTS_FILE).fillna("")
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
+                headers=supabase_headers(),
+                params={
+                    "select": "total_results,results,uploaded_at",
+                    "order": "uploaded_at.desc",
+                    "limit": "1"
+                }
+            )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not retrieve results from Supabase."
+            )
+
+        records = response.json()
+
+        if not records:
+            raise HTTPException(
+                status_code=404,
+                detail="No matching results have been uploaded yet."
+            )
+
+        latest = records[0]
 
         return {
-            "total_results": len(results),
-            "results": results.to_dict(orient="records"),
-            "message": "Latest Python matching results retrieved successfully."
+            "total_results": latest["total_results"],
+            "results": latest["results"],
+            "uploaded_at": latest["uploaded_at"],
+            "message": "Latest matching results retrieved successfully."
         }
 
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(
             status_code=500,
-            detail="Could not read the matching results."
+            detail="Could not retrieve matching results."
         )
