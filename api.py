@@ -1,6 +1,5 @@
 import os
 import hmac
-import logging
 from io import BytesIO
 
 import pandas as pd
@@ -9,18 +8,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 
 
-# --------------------------------------------------
-# APPLICATION CONFIGURATION
-# --------------------------------------------------
-
-app = FastAPI(
-    title="Talent Pool Rediscovery API",
-    description="API for Python-based candidate matching and Salesforce integration",
-    version="2.0.0"
-)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI(title="Talent Pool Rediscovery API")
 
 
 # --------------------------------------------------
@@ -29,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 API_TOKEN = os.environ.get("TALENT_API_TOKEN")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 TABLE_NAME = "talent_pool_results"
@@ -47,13 +35,9 @@ def verify_api_token(x_api_key: str):
             detail="API authentication is not configured."
         )
 
-    if not x_api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="API key is missing."
-        )
-
-    if not hmac.compare_digest(x_api_key, API_TOKEN):
+    if not x_api_key or not hmac.compare_digest(
+        x_api_key, API_TOKEN
+    ):
         raise HTTPException(
             status_code=401,
             detail="Invalid API key."
@@ -66,16 +50,22 @@ def verify_api_token(x_api_key: str):
 
 def verify_supabase_config():
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if not SUPABASE_URL:
         raise HTTPException(
             status_code=503,
-            detail="Supabase configuration is missing."
+            detail="SUPABASE_URL is missing."
         )
 
     if not SUPABASE_URL.startswith("https://"):
         raise HTTPException(
             status_code=503,
-            detail="Invalid Supabase URL configuration."
+            detail="Invalid SUPABASE_URL. It must start with https://"
+        )
+
+    if not SUPABASE_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="SUPABASE_KEY is missing."
         )
 
 
@@ -90,7 +80,7 @@ def supabase_headers():
 
 
 # --------------------------------------------------
-# HOME ENDPOINT
+# HOME
 # --------------------------------------------------
 
 @app.get("/")
@@ -103,20 +93,7 @@ def home():
 
 
 # --------------------------------------------------
-# HEALTH CHECK
-# --------------------------------------------------
-
-@app.get("/health")
-def health_check():
-
-    return {
-        "status": "healthy",
-        "service": "Talent Pool Rediscovery API"
-    }
-
-
-# --------------------------------------------------
-# UPLOAD MATCHING RESULTS
+# UPLOAD MATCHING RESULTS TO SUPABASE
 # --------------------------------------------------
 
 @app.post("/upload-results")
@@ -125,56 +102,30 @@ async def upload_results(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
 
-    # Authenticate request
     verify_api_token(x_api_key)
-
-    # Verify Supabase configuration
     verify_supabase_config()
 
-    # Validate filename
-    if not file.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Filename is missing."
-        )
-
-    if not file.filename.lower().endswith(".csv"):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(
             status_code=400,
             detail="Please upload a CSV file."
         )
 
-    # Read uploaded file
     content = await file.read()
 
-    if not content:
-        raise HTTPException(
-            status_code=400,
-            detail="The uploaded file is empty."
-        )
-
-    # Maximum file size: 10 MB
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(
             status_code=413,
             detail="CSV file must be smaller than 10 MB."
         )
 
-    # --------------------------------------------------
-    # PROCESS CSV
-    # --------------------------------------------------
-
     try:
 
+        # Read CSV
         results_df = pd.read_csv(
-            BytesIO(content),
-            encoding="utf-8-sig"
+            BytesIO(content)
         )
 
-        # Remove completely empty rows
-        results_df = results_df.dropna(how="all")
-
-        # Replace missing values
         results_df = results_df.fillna("")
 
         if results_df.empty:
@@ -183,55 +134,18 @@ async def upload_results(
                 detail="The uploaded CSV contains no results."
             )
 
-        if len(results_df.columns) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="The CSV does not contain valid columns."
-            )
-
-        # Convert DataFrame into JSON-compatible records
-        results = results_df.to_json(
-            orient="records",
-            force_ascii=False
+        # Convert CSV into JSON records
+        results = results_df.to_dict(
+            orient="records"
         )
 
-        import json
-
-        results = json.loads(results)
-
-        total_results = len(results)
-
-        logger.info(
-            "CSV processed successfully. Total records: %s",
-            total_results
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-
-        logger.exception("CSV processing failed")
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not process CSV file: {str(e)}"
-        )
-
-
-    # --------------------------------------------------
-    # SAVE RESULTS TO SUPABASE
-    # --------------------------------------------------
-
-    payload = [
-        {
-            "total_results": total_results,
+        # Supabase database record
+        database_record = {
+            "total_results": len(results),
             "results": results
         }
-    ]
 
-    try:
-
+        # Save to Supabase
         async with httpx.AsyncClient(timeout=60) as client:
 
             response = await client.post(
@@ -240,50 +154,45 @@ async def upload_results(
                     **supabase_headers(),
                     "Prefer": "return=minimal"
                 },
-                json=payload
+                json=[database_record]
             )
 
-        # Supabase insert success
-        if response.status_code in (200, 201, 204):
+        # Check Supabase response
+        if response.status_code not in (200, 201, 204):
 
-            logger.info(
-                "Successfully saved %s records to Supabase.",
-                total_results
+            print("SUPABASE INSERT FAILED")
+            print("STATUS:", response.status_code)
+            print("RESPONSE:", response.text)
+
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Supabase could not save the results.",
+                    "status_code": response.status_code,
+                    "supabase_error": response.text
+                }
             )
 
-            return {
-                "status": "success",
-                "message": "Matching results saved successfully.",
-                "total_results": total_results
-            }
-
-        # Log the actual Supabase error
-        logger.error(
-            "Supabase insert failed. Status: %s, Response: %s",
-            response.status_code,
-            response.text
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail="Supabase could not save matching results. Check Render logs."
-        )
+        return {
+            "message": "Matching results uploaded successfully.",
+            "total_results": len(results)
+        }
 
     except HTTPException:
         raise
 
     except Exception as e:
 
-        logger.exception("Supabase connection failed")
+        print("UPLOAD ERROR:", str(e))
 
         raise HTTPException(
-            status_code=502,
-            detail=f"Could not connect to Supabase: {str(e)}"
+            status_code=500,
+            detail=f"Upload failed: {str(e)}"
         )
 
 
 # --------------------------------------------------
-# GET LATEST MATCHING RESULTS
+# GET LATEST RESULTS FROM SUPABASE
 # --------------------------------------------------
 
 @app.get("/results")
@@ -291,10 +200,7 @@ async def get_latest_results(
     x_api_key: str = Header(..., alias="X-API-Key")
 ):
 
-    # Authenticate request
     verify_api_token(x_api_key)
-
-    # Verify Supabase configuration
     verify_supabase_config()
 
     try:
@@ -311,23 +217,19 @@ async def get_latest_results(
                 }
             )
 
-        # Check Supabase response
         if response.status_code != 200:
 
-            logger.error(
-                "Supabase retrieval failed. Status: %s, Response: %s",
-                response.status_code,
-                response.text
-            )
+            print("SUPABASE FETCH FAILED")
+            print("STATUS:", response.status_code)
+            print("RESPONSE:", response.text)
 
             raise HTTPException(
                 status_code=502,
-                detail="Could not retrieve results from Supabase."
+                detail=f"Supabase retrieval failed: {response.text}"
             )
 
         records = response.json()
 
-        # No uploaded results available
         if not records:
 
             raise HTTPException(
@@ -349,9 +251,9 @@ async def get_latest_results(
 
     except Exception as e:
 
-        logger.exception("Failed to retrieve results")
+        print("RETRIEVAL ERROR:", str(e))
 
         raise HTTPException(
             status_code=500,
-            detail=f"Could not retrieve matching results: {str(e)}"
+            detail=f"Could not retrieve results: {str(e)}"
         )
