@@ -20,11 +20,13 @@ backups/
 # Temporary files
 .tmp_excel_edit/
 
-# Local Salesforce files
+# Local Salesforce authentication and editor files
 .sf/
 .sfdx/
 .vscode/
-force-app/
-pages.json
-sandbox_pages.json
-sfdx-project.json
+
+# Ignore only Salesforce files at the Python project root
+/force-app/
+/pages.json
+/sandbox_pages.json
+/sfdx-project.json

@@ -1,0 +1,140 @@
+<template>
+    <lightning-card
+        title="Talent Pool Rediscovery Dashboard"
+        icon-name="standard:groups">
+
+        <div class="slds-p-around_medium">
+
+            <div class="slds-grid slds-wrap slds-grid_align-spread slds-m-bottom_medium">
+
+                <div>
+                    <h2 class="slds-text-heading_medium">
+                        Candidate Matching Results
+                    </h2>
+
+                    <p class="slds-text-color_weak">
+                        AI-powered candidate matching using Python NLP
+                    </p>
+                </div>
+
+                <lightning-button
+                    label="Refresh Results"
+                    icon-name="utility:refresh"
+                    onclick={loadResults}
+                    disabled={isLoading}>
+                </lightning-button>
+
+            </div>
+
+            <template if:true={isLoading}>
+                <lightning-spinner
+                    alternative-text="Loading candidates"
+                    size="medium">
+                </lightning-spinner>
+            </template>
+
+            <template if:true={errorMessage}>
+                <div class="slds-box slds-theme_error slds-m-bottom_medium">
+                    {errorMessage}
+                </div>
+            </template>
+
+            <template if:true={hasLoaded}>
+
+                <div class="slds-box slds-theme_shade slds-m-bottom_medium">
+
+                    <p class="slds-text-heading_small">
+                        Total Matching Candidates:
+                        <strong>{totalResults}</strong>
+                    </p>
+
+                </div>
+
+                <template if:true={hasCandidates}>
+
+                    <div class="slds-scrollable_x">
+
+                        <table class="slds-table slds-table_bordered slds-table_cell-buffer slds-table_striped">
+
+                            <thead>
+                                <tr>
+                                    <th scope="col">Rank</th>
+                                    <th scope="col">Candidate ID</th>
+                                    <th scope="col">Candidate Name</th>
+                                    <th scope="col">Domain</th>
+                                    <th scope="col">Match Score</th>
+                                    <th scope="col">Matched Skills</th>
+                                    <th scope="col">Missing Requirements</th>
+                                    <th scope="col">Experience</th>
+                                    <th scope="col">Recommendation</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+
+                                <template
+                                    for:each={candidates}
+                                    for:item="candidate">
+
+                                    <tr key={candidate.rowKey}>
+
+                                        <td>
+                                            {candidate.displayRank}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Candidate_ID}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Candidate_Name}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Candidate_Domain}
+                                        </td>
+
+                                        <td>
+                                            {candidate.displayScore}%
+                                        </td>
+
+                                        <td>
+                                            {candidate.Matched_Keywords}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Missing_JD_Requirements}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Years_of_Experience}
+                                        </td>
+
+                                        <td>
+                                            {candidate.Recommendation_Status}
+                                        </td>
+
+                                    </tr>
+
+                                </template>
+
+                            </tbody>
+
+                        </table>
+
+                    </div>
+
+                </template>
+
+                <template if:false={hasCandidates}>
+                    <div class="slds-box slds-theme_info">
+                        No matching candidates found.
+                    </div>
+                </template>
+
+            </template>
+
+        </div>
+
+    </lightning-card>
+</template>
