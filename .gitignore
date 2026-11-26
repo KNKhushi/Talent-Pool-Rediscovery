@@ -1,14 +1,30 @@
+# Python environment
 .venv/
 venv/
 __pycache__/
 *.py[cod]
+
+# Secrets
+.api_token
 .env
 .env.*
 !.env.example
-.api_token
-results/
-*.csv
+
+# Candidate data and generated files
 data/
+results/
 outputs/
 backups/
+*.csv
+
+# Temporary files
 .tmp_excel_edit/
+
+# Local Salesforce files
+.sf/
+.sfdx/
+.vscode/
+force-app/
+pages.json
+sandbox_pages.json
+sfdx-project.json
